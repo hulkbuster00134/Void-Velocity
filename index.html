@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Void Velocity</title>
+    <style>
+        body { margin:0; overflow:hidden; background:#000; font-family:'Courier New', monospace; transition: background 1.5s ease; }
+        canvas { display:block; }
+        
+        #menu { 
+            width:100%; height:100%; position:absolute; z-index:10;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #000 100%);
+            display:flex; flex-direction:column; align-items:center; justify-content:center;
+            color: white;
+        }
+
+        .title {
+            font-size: 80px; font-weight: 900; letter-spacing: 10px;
+            position: relative; animation: glitch 3s infinite;
+            text-shadow: 0 0 10px rgba(255,255,255,0.5); margin: 0;
+        }
+
+        @keyframes glitch {
+            0% { text-shadow: 2px 2px #ff4757, -2px -2px #2ecc71; transform: skew(0deg); }
+            2% { text-shadow: -5px 0 #ff4757, 5px 0 #2ecc71; transform: skew(10deg); }
+            4% { text-shadow: 2px 2px #ff4757, -2px -2px #2ecc71; transform: skew(0deg); }
+            98% { transform: scale(1); }
+            99% { transform: scale(1.05) skew(-5deg); text-shadow: 5px 0 #00d2ff, -5px 0 #ff4757; }
+            100% { transform: scale(1); }
+        }
+
+        .subtitle { font-size: 14px; letter-spacing: 5px; color: #888; margin-bottom: 40px; text-transform: uppercase; }
+
+        .mode-card {
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2);
+            padding: 25px; border-radius: 8px; cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+            text-align: center; width: 140px; display: inline-block; margin: 15px;
+            backdrop-filter: blur(5px);
+        }
+
+        .mode-card:hover { transform: translateY(-15px) scale(1.1); background: #fff; color: #000; box-shadow: 0 20px 50px rgba(255,255,255,0.3); border-color: #fff; }
+
+        #home-btn {
+            position: absolute; top: 30px; right: 30px; width: 60px; height: 60px;
+            background: rgba(255,255,255,0.1); border: 2px solid #fff; border-radius: 50%;
+            cursor: pointer; z-index: 100; display: flex; align-items: center; justify-content: center;
+            font-size: 28px; transition: transform 0.3s ease-out, background 0.3s; color: white;
+        }
+
+        #home-btn:hover { background: #fff; color: #000; transform: rotate(15deg) scale(1.1); }
+
+        #ui { position:absolute; top:30px; left:30px; font-weight:lighter; font-size:18px; color: #fff; z-index: 5; pointer-events: none; letter-spacing: 2px; }
+        #lvl, #dths { font-weight: bold; color: #ff4757; }
+
+        #skip-btn { 
+            position:absolute; bottom:30px; left:30px; display:none; 
+            background:transparent; color:#fff; border:1px solid #fff; padding:12px 24px; 
+            cursor:pointer; font-size: 14px; z-index: 10; letter-spacing: 2px; transition: 0.3s;
+        }
+        #skip-btn:hover { background: #fff; color: #000; }
+    </style>
+</head>
+<body id="body">
+
+<div id="menu">
+    <h1 class="title">VOID VELOCITY</h1>
+    <p class="subtitle">30 Stages of Digital Purgatory</p>
+    <div>
+        <div class="mode-card" onclick="startGame('medium')"><span>🟢</span><br><b>STABLE</b></div>
+        <div class="mode-card" onclick="startGame('hard')"><span>🟠</span><br><b>UNSTABLE</b></div>
+        <div class="mode-card" onclick="startGame('beast')"><span>🔴</span><br><b>CRITICAL</b></div>
+    </div>
+</div>
+
+<div id="home-btn" onclick="location.reload()">🏠</div>
+<div id="ui">SYSTEM: <span id="theme-ui">BOOTING</span> | STAGE: <span id="lvl">1</span> | LOSSES: <span id="dths">0</span></div>
+<button id="skip-btn" onclick="skipLevel()">BYPASS PROTOCOL</button>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const body = document.getElementById("body");
+const skipBtn = document.getElementById("skip-btn");
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// --- AUDIO ENGINE ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playDeathSound() {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+}
+
+let state = "MENU", currentLevel = 1, totalDeaths = 0, levelFailures = 0, difficulty = "medium", scrollX = 0;
+let player = { x:100, y:0, w:30, h:30, vx:0, vy:0, grounded:false };
+let platforms = [], obstacles = [], goal = { x:0, y:0, w:60, h:80 };
+let keys = {};
+let shakeAmt = 0; // Screen shake variable
+
+const themes = [
+    { name: "NEON GRID", bg: "#0a0a0a", platform: "#111", hazard: "#00d2ff" },
+    { name: "BLOOD MOON", bg: "#1a0505", platform: "#2a0000", hazard: "#ff4757" },
+    { name: "CYBER SEWER", bg: "#051a05", platform: "#002a00", hazard: "#2ecc71" }
+];
+
+const homeBtn = document.getElementById('home-btn');
+document.addEventListener('mousemove', (e) => {
+    const rect = homeBtn.getBoundingClientRect();
+    const bx = rect.left + rect.width/2;
+    const by = rect.top + rect.height/2;
+    const dist = Math.hypot(e.clientX - bx, e.clientY - by);
+    if(dist < 200) {
+        const angle = Math.atan2(e.clientY - by, e.clientX - bx) * 180 / Math.PI;
+        homeBtn.style.transform = `rotate(${angle/10}deg) scale(${1 + (200-dist)/1000})`;
+    } else {
+        homeBtn.style.transform = `rotate(0deg) scale(1)`;
+    }
+});
+
+function startGame(diff) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    difficulty = diff; state = "PLAY";
+    document.getElementById("menu").style.opacity = "0";
+    setTimeout(() => { document.getElementById("menu").style.display = "none"; }, 500);
+    loadLevel();
+    requestAnimationFrame(loop);
+}
+
+function loadLevel() {
+    levelFailures = 0; skipBtn.style.display = "none";
+    platforms = []; obstacles = []; scrollX = 0;
+    let theme = themes[currentLevel % themes.length];
+    body.style.background = theme.bg;
+    document.getElementById("theme-ui").innerText = theme.name;
+
+    let gapSize = difficulty === 'beast' ? 280 : (difficulty === 'hard' ? 220 : 160);
+    let platWidth = difficulty === 'beast' ? 70 : (difficulty === 'hard' ? 100 : 150);
+    let hazardFreq = difficulty === 'beast' ? 0.9 : (difficulty === 'hard' ? 0.6 : 0.3);
+
+    platforms.push({ x: 0, y: canvas.height - 150, w: 300, h: 40 });
+
+    let xTracker = 450;
+    for(let i=0; i < 8; i++) {
+        let yBase = (canvas.height * 0.7) - (Math.random() * 200);
+        platforms.push({ x: xTracker, y: yBase, w: platWidth, h: 20, yBase: yBase, movingV: Math.random() < 0.4, range: 80 });
+        if(Math.random() < hazardFreq) {
+            obstacles.push({ type:'pendulum', x: xTracker + platWidth/2, y: yBase - 180, length: 150, angle: 0 });
+        }
+        xTracker += platWidth + gapSize;
+    }
+    goal.x = xTracker; goal.y = canvas.height - 230;
+    platforms.push({ x: xTracker - 50, y: canvas.height - 150, w: 200, h: 40 });
+    resetPosition();
+}
+
+function resetPosition() {
+    player.x = 80; player.y = canvas.height - 300;
+    player.vx = 0; player.vy = 0;
+}
+
+function handleDeath() {
+    totalDeaths++; levelFailures++;
+    shakeAmt = 15; // Trigger shake
+    playDeathSound(); // Trigger sound
+    document.getElementById("dths").innerText = totalDeaths;
+    if(levelFailures >= 5) skipBtn.style.display = "block";
+    body.style.filter = "invert(1) hue-rotate(180deg)";
+    setTimeout(() => { body.style.filter = "none"; }, 100);
+    resetPosition();
+}
+
+function skipLevel() { currentLevel++; document.getElementById("lvl").innerText = currentLevel; loadLevel(); }
+
+window.onkeydown = e => keys[e.key] = true;
+window.onkeyup = e => keys[e.key] = false;
+
+function update() {
+    if(state !== "PLAY") return;
+    let speed = difficulty === 'beast' ? 11 : 8;
+    if(keys["ArrowRight"] || keys["d"]) player.vx = speed;
+    else if(keys["ArrowLeft"] || keys["a"]) player.vx = -speed;
+    else player.vx *= 0.8;
+
+    if((keys["ArrowUp"] || keys["w"] || keys[" "]) && player.grounded) {
+        player.vy = -17; player.grounded = false;
+    }
+
+    player.vy += 0.9; player.x += player.vx; player.y += player.vy;
+    scrollX += (player.x - canvas.width/3 - scrollX) * 0.08;
+
+    player.grounded = false;
+    platforms.forEach(p => {
+        if(p.movingV) p.y = p.yBase + Math.sin(Date.now() * 0.003) * p.range;
+        if(player.x < p.x + p.w && player.x + player.w > p.x && player.y + player.h > p.y && player.y + player.h < p.y + 20 && player.vy >= 0) {
+            player.y = p.y - player.h; player.vy = 0; player.grounded = true;
+        }
+    });
+
+    obstacles.forEach(o => {
+        o.angle = Math.sin(Date.now() * 0.002) * 1.5;
+        let bx = o.x + Math.sin(o.angle) * o.length;
+        let by = o.y + Math.cos(o.angle) * o.length;
+        if(Math.sqrt((player.x+15-bx)**2 + (player.y+15-by)**2) < 25) handleDeath();
+        o.bx = bx; o.by = by;
+    });
+
+    if(player.x > goal.x) { currentLevel++; document.getElementById("lvl").innerText = currentLevel; loadLevel(); }
+    if(player.y > canvas.height + 100) handleDeath();
+
+    if(shakeAmt > 0) shakeAmt *= 0.9; // Decay shake effect
+}
+
+function draw() {
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    
+    ctx.save();
+    // Apply Screen Shake
+    if(shakeAmt > 0.5) {
+        ctx.translate(Math.random() * shakeAmt - shakeAmt/2, Math.random() * shakeAmt - shakeAmt/2);
+    }
+    
+    ctx.translate(-scrollX, 0);
+
+    ctx.shadowBlur = 30; ctx.shadowColor = "#fff";
+    ctx.fillStyle = "#fff"; ctx.fillRect(goal.x, goal.y, goal.w, goal.h);
+    ctx.shadowBlur = 0;
+
+    let theme = themes[currentLevel % themes.length];
+    platforms.forEach(p => {
+        ctx.fillStyle = theme.platform;
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.strokeRect(p.x, p.y, p.w, p.h);
+    });
+
+    obstacles.forEach(o => {
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.beginPath(); ctx.moveTo(o.x, o.y); ctx.lineTo(o.bx, o.by); ctx.stroke();
+        ctx.fillStyle = theme.hazard;
+        ctx.shadowBlur = 15; ctx.shadowColor = theme.hazard;
+        ctx.beginPath(); ctx.arc(o.bx, o.by, 12, 0, Math.PI*2); ctx.fill();
+        ctx.shadowBlur = 0;
+    });
+
+    ctx.fillStyle = "#fff";
+    ctx.shadowBlur = 10; ctx.shadowColor = "#fff";
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    ctx.shadowBlur = 0;
+
+    ctx.restore();
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+</script>
+</body>
+</html>
